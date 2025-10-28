@@ -8,6 +8,34 @@
 
 This implementation provides a complete Fuzzy Extractor system suitable for embedded systems. A fuzzy extractor generates stable cryptographic keys from noisy biometric or physical data (like PUF responses).
 
+## Build Features
+
+The project supports multiple build configurations:
+
+### Feature Flags
+
+- **`std`** (default): Standard library support with all features
+- **`no_std`**: Embedded/bare-metal support without standard library
+- **`jemalloc`**: Enable jemalloc allocator for benchmarking (requires `std`)
+
+### Building
+
+```bash
+# Standard build (default)
+cargo build
+
+# No-std build for embedded systems
+cargo build --no-default-features --features no_std
+
+# Build with jemalloc for benchmarking
+cargo build --features jemalloc
+
+# Using Makefile
+make build-lib-std      # Build with std feature
+make build-lib-nostd    # Build with no_std feature
+make build-lib-all      # Build both variants
+```
+
 ## Features
 
 ### 1. **Configurable Key Derivation Function (KDF) Trait**
@@ -167,6 +195,54 @@ The implementation includes comprehensive unit tests (43 tests total):
 make test                 # Run all library tests (default: std feature)
 make test-std             # Run tests with std feature
 make test-all             # Run tests for both std and no_std
+
+# Using cargo directly
+cargo test                # Run tests with default features
+cargo test --features std # Run tests with std feature
+cargo test --no-default-features --features no_std  # Run no_std tests (limited)
+```
+
+## Benchmarks
+
+The project includes comprehensive benchmarks to measure performance. Benchmarks are run with the `jemalloc` feature enabled for optimal memory allocation performance.
+
+### Available Benchmarks
+
+#### Fuzzy Extractor Benchmarks
+- **bench_fuzzy_extractor_generate**: Measures key generation performance (24-byte input, 15% error rate, 32-byte key)
+- **bench_fuzzy_extractor_reproduce_no_noise**: Measures key recovery with perfect input match
+- **bench_fuzzy_extractor_reproduce_with_noise**: Measures key recovery with intentional noise (3 errors)
+- **bench_fuzzy_extractor_generate_large_key**: Tests large key generation (32-byte input, 10% error rate, 128-byte key)
+- **bench_fuzzy_extractor_full_round_trip**: Measures complete generate + reproduce cycle
+
+#### Memory Usage Benchmarks
+- **bench_memory_fuzzy_extractor_generate**: Reports memory usage for key generation
+- **bench_memory_fuzzy_extractor_reproduce**: Reports memory usage for key reproduction
+- **bench_memory_fuzzy_extractor_large_interleaved**: Tests interleaved block processing (384-byte input with 16-byte blocks)
+
+### Running Benchmarks
+
+```bash
+# Using Makefile (recommended - automatically enables jemalloc)
+make bench
+
+# Using cargo directly with jemalloc feature
+cargo bench --features jemalloc -- --nocapture
+
+# Run specific benchmark
+cargo bench --features jemalloc bench_fuzzy_extractor_generate -- --nocapture
+```
+
+**Note**: The `--nocapture` flag is used to display memory usage statistics printed by the memory benchmarks.
+
+### Benchmark Configuration
+
+The benchmarks use:
+- **Allocator**: jemalloc (enabled via `jemalloc` feature flag)
+- **Message lengths**: 16-32 bytes
+- **Error rates**: 0.1-0.2 (10-20%)
+- **Key lengths**: 32-128 bytes
+- **Test data**: Synthetic biometric-like inputs
 
 ## Security Considerations
 
