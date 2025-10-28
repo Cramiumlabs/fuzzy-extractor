@@ -21,7 +21,7 @@ impl ReedSolomonECC {
                 "error_rate must be in the range (0.0, 0.5)"));
         }
 
-        let ecc_len = libm::floor((msg_len as f64 * error_rate as f64 * 2.0) as f64) as usize;
+        let ecc_len = libm::floor(msg_len as f64 * error_rate as f64 * 2.0) as usize;
         if msg_len + ecc_len > 255 {
             return Err(EccError::InvalidParameters(
                 "msg_len + ecc_len exceeds the maximum codeword size of 255 symbols"));
@@ -36,13 +36,9 @@ impl ReedSolomonECC {
         let e = err_rate as f64;
 
         #[cfg(feature = "std")]
-        let mut ecc_len = (m * e * 2.0).floor() as usize;
+        let ecc_len = (m * e * 2.0).floor() as usize;
         #[cfg(not(feature = "std"))]
-        let mut ecc_len = libm::floor(m * e * 2.0) as usize;
-
-        if ecc_len % 2 != 0 {
-            ecc_len += 1;
-        }
+        let ecc_len = libm::floor(m * e * 2.0) as usize;
 
         let codeword_len = msg_len + ecc_len;
         let correctable = ecc_len / 2;
