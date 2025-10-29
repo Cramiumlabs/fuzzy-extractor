@@ -2,6 +2,7 @@ extern crate alloc;
 use crate::ecc::{ECC, SecureSketch};
 use crate::errors::FuzzyExtractorError;
 use alloc::vec::Vec;
+use zeroize::Zeroize;
 
 
 const INFO_SINGLE_BLOCK_SEED: &[u8] = b"single_block_seed";
@@ -133,9 +134,13 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         seed_input: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), FuzzyExtractorError> {
         let msg_len = self.sketch.ecc.message_len();
-        let seed = self.derive_kdf(seed_input, INFO_SINGLE_BLOCK_SEED, msg_len)?;
+        let mut seed = self.derive_kdf(seed_input, INFO_SINGLE_BLOCK_SEED, msg_len)?;
         let key = self.derive_kdf(&seed, INFO_SINGLE_BLOCK_SEED, self.key_len)?;
         let helper = self.sketch.sketch(w, &seed)?;
+        
+        // Zeroize seed after helper computed
+        seed.zeroize();
+        
         Ok((key, helper))
     }
 
@@ -175,7 +180,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             seed_input_block.extend_from_slice(w_i);
 
             // Derive seed for this block
-            let seed_buf = self.derive_kdf(&seed_input_block, b"generate_multi_block_seed", msg_len)?;
+            let mut seed_buf = self.derive_kdf(&seed_input_block, b"generate_multi_block_seed", msg_len)?;
 
             // Generate helper for this block
             let helper_buf = self.sketch.sketch(w_i, &seed_buf)?;
@@ -185,13 +190,24 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             combined_helper.extend_from_slice(&helper_buf);
 
             // Derive and append block key directly to all_block_keys
-            let key_i = self.derive_kdf(&seed_buf, INFO_MULTI_BLOCK_KEY, self.per_block_key_len)?;
+            let mut key_i = self.derive_kdf(&seed_buf, INFO_MULTI_BLOCK_KEY, self.per_block_key_len)?;
             all_block_keys.extend_from_slice(&key_i);
-            // Note: key_i is freed here at end of iteration
+            
+            // Zeroize sensitive data after use
+            key_i.zeroize();
+            seed_buf.zeroize();
         }
 
+        // Zeroize reusable buffer after loop completes
+        seed_input_block.zeroize();
+        
         // Derive final combined key
         let final_key = self.derive_kdf(&all_block_keys, INFO_MULTI_BLOCK_FINAL_KEY, self.key_len)?;
+        
+        // Zeroize sensitive data after final key derived
+        all_block_keys.zeroize();
+        w_padded.zeroize();
+        
         Ok((final_key, combined_helper))
     }
 
@@ -201,8 +217,13 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         helper: &[u8],
         known_erasures: Option<&[u8]>,
     ) -> Result<Vec<u8>, FuzzyExtractorError> {
-        let seed = self.sketch.recover(helper, w_prime, known_erasures)?;
-        self.derive_kdf(&seed, INFO_SINGLE_BLOCK_SEED, self.key_len)
+        let mut seed = self.sketch.recover(helper, w_prime, known_erasures)?;
+        let key = self.derive_kdf(&seed, INFO_SINGLE_BLOCK_SEED, self.key_len)?;
+        
+        // Zeroize seed after key derived
+        seed.zeroize();
+        
+        Ok(key)
     }
 
     // Multi-block reproduction
@@ -255,16 +276,24 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             let w_i = &w_padded[start..end];
 
             // Recover seed for this block
-            let seed_buf = self.sketch.recover(helper_i, w_i, known_erasures)?;
+            let mut seed_buf = self.sketch.recover(helper_i, w_i, known_erasures)?;
 
             // Derive and append block key directly to all_block_keys
-            let key_i = self.derive_kdf(&seed_buf, b"reproduce_multi_block_key", self.per_block_key_len)?;
+            let mut key_i = self.derive_kdf(&seed_buf, INFO_MULTI_BLOCK_KEY, self.per_block_key_len)?;
             all_block_keys.extend_from_slice(&key_i);
-            // Note: key_i is freed here at end of iteration
+            
+            // Zeroize sensitive data after use
+            key_i.zeroize();
+            seed_buf.zeroize();
         }
 
         // Derive final combined key
-        let final_key = self.derive_kdf(&all_block_keys, b"reproduce_multi_block_final_key", self.key_len)?;
+        let final_key = self.derive_kdf(&all_block_keys, INFO_MULTI_BLOCK_FINAL_KEY, self.key_len)?;
+        
+        // Zeroize sensitive data after final key derived
+        all_block_keys.zeroize();
+        w_padded.zeroize();
+        
         Ok(final_key)
     }
 }

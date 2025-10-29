@@ -14,6 +14,7 @@ rand = { version = "0.8", optional = true, features = ["std"] }
 libm = { version = "0.2", default-features = false }
 lazy_static = "1.4"
 sha2 = "0.10"
+zeroize = { version = "1.7", features = ["alloc"] }
 
 [profile.dev]
 panic = "abort"
