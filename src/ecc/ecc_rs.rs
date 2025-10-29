@@ -19,16 +19,21 @@ impl ReedSolomonECC {
         }
         if !(0.0..0.5).contains(&error_rate) {
             return Err(EccError::InvalidParameters(
-                "error_rate must be in the range (0.0, 0.5)"));
+                "error_rate must be in the range (0.0, 0.5)",
+            ));
         }
 
         let ecc_len = libm::floor(msg_len as f64 * error_rate as f64 * 2.0) as usize;
         if msg_len + ecc_len > 255 {
             return Err(EccError::InvalidParameters(
-                "msg_len + ecc_len exceeds the maximum codeword size of 255 symbols"));
+                "msg_len + ecc_len exceeds the maximum codeword size of 255 symbols",
+            ));
         }
 
-        Ok(Self { msg_len, error_rate })
+        Ok(Self {
+            msg_len,
+            error_rate,
+        })
     }
 
     /// Compute parity + metadata

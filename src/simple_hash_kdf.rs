@@ -1,14 +1,12 @@
-//! SimpleHashKdf: A lightweight key derivation function for embedded systems
+//! SimpleHashKdf: A lightweight key derivation function for PoC
 
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::fuzzy_extractor::KeyDerivationFunction;
+use alloc::vec::Vec;
 
 /// Simple hash-based KDF using XOR and byte rotation
 ///
-/// This is a lightweight KDF suitable for embedded systems where cryptographic
-/// libraries might not be available. It uses simple operations (XOR, rotation)
-/// to derive keys from input material.
+/// This is a lightweight KDF suitable for a PoC
 ///
 /// **Note**: This is a demonstration implementation. For production use,
 /// consider using a proper cryptographic KDF like HKDF.

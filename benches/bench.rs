@@ -157,14 +157,9 @@ fn bench_fuzzy_extractor_keygen_with_blocks(b: &mut Bencher) {
 
     let ecc = ReedSolomonECC::new(block_size, err_rate).unwrap();
     let kdf = SimpleHashKdf::new_no_salt();
-    let extractor = FuzzyExtractor::new_with_blocks(
-        ecc,
-        kdf,
-        block_size,
-        per_block_key_len,
-        final_key_len,
-    )
-    .unwrap();
+    let extractor =
+        FuzzyExtractor::new_with_blocks(ecc, kdf, block_size, per_block_key_len, final_key_len)
+            .unwrap();
 
     let seed_input = vec![0xAB; block_size];
     let w = vec![0u8; 384];
@@ -183,14 +178,9 @@ fn bench_fuzzy_extractor_reproduce_with_blocks(b: &mut Bencher) {
 
     let ecc = ReedSolomonECC::new(block_size, err_rate).unwrap();
     let kdf = SimpleHashKdf::new_no_salt();
-    let extractor = FuzzyExtractor::new_with_blocks(
-        ecc,
-        kdf,
-        block_size,
-        per_block_key_len,
-        final_key_len,
-    )
-    .unwrap();
+    let extractor =
+        FuzzyExtractor::new_with_blocks(ecc, kdf, block_size, per_block_key_len, final_key_len)
+            .unwrap();
 
     let seed_input = vec![0xAB; block_size];
     let w = vec![0u8; 384];
