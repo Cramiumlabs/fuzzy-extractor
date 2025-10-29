@@ -15,7 +15,6 @@ pub struct FuzzyExtractor<E: ECC, K: KeyDerivationFunction> {
     kdf: K,
     key_len: usize,
     block_size: Option<usize>,
-    #[allow(dead_code)]
     per_block_key_len: usize,
 }
 
@@ -144,7 +143,6 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         let mut w_padded = w.to_vec();
         if w.len() % block_size != 0 {
             let pad_len = block_size - (w.len() % block_size);
-            // Ensure padding is done in constant time for security
             w_padded.extend((0..pad_len).map(|_| 0xAA));
         }
 
@@ -221,7 +219,6 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         let mut w_padded = w_prime.to_vec();
         if w_prime.len() % block_size != 0 {
             let pad_len = block_size - (w_prime.len() % block_size);
-            // Ensure padding is done in constant time for security
             w_padded.extend((0..pad_len).map(|_| 0xAA));
         }
 
@@ -266,8 +263,6 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
     }
 }
 
-/// Note: It is recommended that the size of `x` matches the output of `Encode(m)`.
-/// This ensures that runtime checks and transformations can be avoided, improving efficiency.
 #[cfg(test)]
 mod tests {
     use super::*;
