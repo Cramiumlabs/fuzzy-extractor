@@ -1,7 +1,7 @@
 extern crate alloc;
-use alloc::vec::Vec;
 use crate::ecc::{ECC, SecureSketch};
 use crate::errors::FuzzyExtractorError;
+use alloc::vec::Vec;
 
 /// Trait for Key Derivation Functions
 pub trait KeyDerivationFunction {
@@ -168,7 +168,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
 
             // Derive seed for this block
             let seed_buf = self.derive_kdf(&seed_input_block, msg_len)?;
-            
+
             // Generate helper for this block
             let helper_buf = self.sketch.sketch(w_i, &seed_buf)?;
 
@@ -197,6 +197,10 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         self.derive_kdf(&seed, self.key_len)
     }
 
+    // Multi-block reproduction
+    // w and w_prime have the same length
+    // If w_prime is shorter or longer, we don't know which bytes are missing/added
+    // → assume same length, no padding in reproduce
     fn reproduce_multi_block(
         &self,
         w_prime: &[u8],
@@ -246,7 +250,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
 
             // Recover seed for this block
             let seed_buf = self.sketch.recover(helper_i, w_i, known_erasures)?;
-            
+
             // Derive and append block key directly to all_block_keys
             let key_i = self.derive_kdf(&seed_buf, self.per_block_key_len)?;
             all_block_keys.extend_from_slice(&key_i);
@@ -477,11 +481,11 @@ mod tests {
     #[test]
     fn test_fuzzy_extractor_block_based_different_sizes() {
         // Test with different block sizes
-        for block_size in [16, 20] {
+        for block_size in [16, 20, 24, 28, 32] {
             let err_rate = 0.15;
             let per_block_key_len = 32;
             let final_key_len = 32;
-            let total_size = 128;
+            let total_size = 1024;
 
             let w = vec![0xAA; total_size];
             let seed_input = vec![0xBB; block_size];
