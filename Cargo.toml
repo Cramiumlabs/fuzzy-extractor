@@ -16,6 +16,7 @@ libm = { version = "0.2", default-features = false }
 jemalloc-ctl = { version = "0.5", optional = true }
 jemallocator = { version = "0.5", optional = true }
 lazy_static = "1.4"
+sha2 = "0.10"
 
 [dev-dependencies]
 # Ensure jemalloc-ctl and jemallocator are included for benchmarking

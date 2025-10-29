@@ -10,3 +10,4 @@ static ALLOC: Jemalloc = Jemalloc;
 pub mod ecc;
 pub mod fuzzy_extractor;
 pub mod secure_sketch;
+pub mod simple_hash_kdf;

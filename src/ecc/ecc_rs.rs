@@ -6,6 +6,7 @@ use reed_solomon::{Decoder, Encoder};
 use crate::ecc::ecc_trait::{ECC, EccError};
 
 /// Reed–Solomon ECC implementation
+#[derive(Clone)]
 pub struct ReedSolomonECC {
     pub msg_len: usize,
     pub error_rate: f32,
