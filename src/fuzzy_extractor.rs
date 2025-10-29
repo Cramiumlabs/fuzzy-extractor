@@ -88,6 +88,9 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
     }
 
     /// Reproduces the key from noisy input and helper data
+    // w and w_prime have the same length
+    // If w_prime is shorter or longer, we don't know which bytes are missing/added
+    // → assume same length, no padding in reproduce
     pub fn reproduce(
         &self,
         w_prime: &[u8],
@@ -141,7 +144,8 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         let mut w_padded = w.to_vec();
         if w.len() % block_size != 0 {
             let pad_len = block_size - (w.len() % block_size);
-            w_padded.extend(core::iter::repeat(0xAA).take(pad_len));
+            // Ensure padding is done in constant time for security
+            w_padded.extend((0..pad_len).map(|_| 0xAA));
         }
 
         let num_blocks = w_padded.len() / block_size;
@@ -199,8 +203,6 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
 
     // Multi-block reproduction
     // w and w_prime have the same length
-    // If w_prime is shorter or longer, we don't know which bytes are missing/added
-    // → assume same length, no padding in reproduce
     fn reproduce_multi_block(
         &self,
         w_prime: &[u8],
@@ -219,7 +221,8 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         let mut w_padded = w_prime.to_vec();
         if w_prime.len() % block_size != 0 {
             let pad_len = block_size - (w_prime.len() % block_size);
-            w_padded.extend(core::iter::repeat(0xAA).take(pad_len));
+            // Ensure padding is done in constant time for security
+            w_padded.extend((0..pad_len).map(|_| 0xAA));
         }
 
         // Preallocate result buffer

@@ -1,5 +1,5 @@
-use core::fmt;
 use crate::ecc::EccError;
+use core::fmt;
 
 /// Errors for FuzzyExtractor operations
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
