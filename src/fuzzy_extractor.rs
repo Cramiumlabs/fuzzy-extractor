@@ -3,10 +3,16 @@ use crate::ecc::{ECC, SecureSketch};
 use crate::errors::FuzzyExtractorError;
 use alloc::vec::Vec;
 
+
+const INFO_SINGLE_BLOCK_SEED: &[u8] = b"single_block_seed";
+const INFO_MULTI_BLOCK_KEY: &[u8] = b"multi_block_key";
+const INFO_MULTI_BLOCK_FINAL_KEY: &[u8] = b"multi_block_final_key";
+
 /// Trait for Key Derivation Functions
+/// For product security, KDFs should be strong, resistant to length-extension attacks.
 pub trait KeyDerivationFunction {
-    /// Derives a key from input data
-    fn derive(&self, input: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str>;
+    /// Derives a key from input data with additional context information
+    fn derive(&self, input: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str>;
 }
 
 /// Fuzzy Extractor for generating stable keys
@@ -115,9 +121,9 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         self.key_len
     }
 
-    fn derive_kdf(&self, input: &[u8], len: usize) -> Result<Vec<u8>, FuzzyExtractorError> {
+    fn derive_kdf(&self, input: &[u8], info: &[u8], len: usize) -> Result<Vec<u8>, FuzzyExtractorError> {
         self.kdf
-            .derive(input, len)
+            .derive(input, info, len)
             .map_err(FuzzyExtractorError::KdfError)
     }
 
@@ -127,9 +133,9 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         seed_input: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), FuzzyExtractorError> {
         let msg_len = self.sketch.ecc.message_len();
-        let seed = self.derive_kdf(seed_input, msg_len)?;
+        let seed = self.derive_kdf(seed_input, INFO_SINGLE_BLOCK_SEED, msg_len)?;
+        let key = self.derive_kdf(&seed, INFO_SINGLE_BLOCK_SEED, self.key_len)?;
         let helper = self.sketch.sketch(w, &seed)?;
-        let key = self.derive_kdf(&seed, self.key_len)?;
         Ok((key, helper))
     }
 
@@ -169,7 +175,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             seed_input_block.extend_from_slice(w_i);
 
             // Derive seed for this block
-            let seed_buf = self.derive_kdf(&seed_input_block, msg_len)?;
+            let seed_buf = self.derive_kdf(&seed_input_block, b"generate_multi_block_seed", msg_len)?;
 
             // Generate helper for this block
             let helper_buf = self.sketch.sketch(w_i, &seed_buf)?;
@@ -179,13 +185,13 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             combined_helper.extend_from_slice(&helper_buf);
 
             // Derive and append block key directly to all_block_keys
-            let key_i = self.derive_kdf(&seed_buf, self.per_block_key_len)?;
+            let key_i = self.derive_kdf(&seed_buf, INFO_MULTI_BLOCK_KEY, self.per_block_key_len)?;
             all_block_keys.extend_from_slice(&key_i);
             // Note: key_i is freed here at end of iteration
         }
 
         // Derive final combined key
-        let final_key = self.derive_kdf(&all_block_keys, self.key_len)?;
+        let final_key = self.derive_kdf(&all_block_keys, INFO_MULTI_BLOCK_FINAL_KEY, self.key_len)?;
         Ok((final_key, combined_helper))
     }
 
@@ -196,7 +202,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
         known_erasures: Option<&[u8]>,
     ) -> Result<Vec<u8>, FuzzyExtractorError> {
         let seed = self.sketch.recover(helper, w_prime, known_erasures)?;
-        self.derive_kdf(&seed, self.key_len)
+        self.derive_kdf(&seed, INFO_SINGLE_BLOCK_SEED, self.key_len)
     }
 
     // Multi-block reproduction
@@ -252,16 +258,17 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             let seed_buf = self.sketch.recover(helper_i, w_i, known_erasures)?;
 
             // Derive and append block key directly to all_block_keys
-            let key_i = self.derive_kdf(&seed_buf, self.per_block_key_len)?;
+            let key_i = self.derive_kdf(&seed_buf, b"reproduce_multi_block_key", self.per_block_key_len)?;
             all_block_keys.extend_from_slice(&key_i);
             // Note: key_i is freed here at end of iteration
         }
 
         // Derive final combined key
-        let final_key = self.derive_kdf(&all_block_keys, self.key_len)?;
+        let final_key = self.derive_kdf(&all_block_keys, b"reproduce_multi_block_final_key", self.key_len)?;
         Ok(final_key)
     }
 }
+
 
 #[cfg(test)]
 mod tests {

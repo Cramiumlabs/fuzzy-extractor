@@ -61,8 +61,8 @@ impl SimpleHashKdf {
 }
 
 impl KeyDerivationFunction for SimpleHashKdf {
-    /// Derive a key of specified length from input material
-    fn derive(&self, input: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str> {
+    /// Derive a key of specified length from input material with additional context
+    fn derive(&self, input: &[u8], info: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str> {
         if input.is_empty() {
             return Err("Input cannot be empty");
         }
@@ -75,6 +75,7 @@ impl KeyDerivationFunction for SimpleHashKdf {
 
         while derived_key.len() < output_len {
             let mut block_input = input.to_vec();
+            block_input.extend_from_slice(info);
             block_input.push(counter);
             let block = self.hash_like(&block_input, 3);
             derived_key.extend_from_slice(&block);
@@ -95,7 +96,7 @@ mod tests {
         let kdf = SimpleHashKdf::new_no_salt();
         let input = b"test input data";
 
-        let derived = kdf.derive(input, 32).unwrap();
+        let derived = kdf.derive(input, &[], 32).unwrap();
         assert_eq!(derived.len(), 32);
     }
 }
