@@ -1,6 +1,7 @@
 extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
+use zeroize::Zeroize;
 
 use crate::ecc::ecc_trait::{ECC, EccError};
 
@@ -41,8 +42,12 @@ impl<E: ECC> SecureSketch<E> {
         if x.len() > codeword_len {
             return Err(EccError::InvalidLength("x", codeword_len, x.len()));
         }
-        let x_ext = self.extend_x(x, codeword_len);
+        let mut x_ext = self.extend_x(x, codeword_len);
         let helper: Vec<u8> = c.iter().zip(x_ext.iter()).map(|(a, b)| a ^ b).collect();
+        
+        // Zeroize x_ext after XOR operation (contains biometric/noisy secret data)
+        x_ext.zeroize();
+        
         Ok(helper)
     }
 
@@ -60,12 +65,16 @@ impl<E: ECC> SecureSketch<E> {
                 x_prime.len(),
             ));
         }
-        let x_ext = self.extend_x(x_prime, codeword_len);
+        let mut x_ext = self.extend_x(x_prime, codeword_len);
         let c_prime: Vec<u8> = helper
             .iter()
             .zip(x_ext.iter())
             .map(|(a, b)| a ^ b)
             .collect();
+        
+        // Zeroize x_ext after XOR operation (contains biometric/noisy secret data)
+        x_ext.zeroize();
+        
         self.ecc.reproduce(&c_prime, known_erasures)
     }
 }
