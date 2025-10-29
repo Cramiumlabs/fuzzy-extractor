@@ -25,4 +25,4 @@ clean:
 	cargo clean
 
 bench:
-	cargo bench --features jemalloc -- --nocapture
+	cargo bench -- --nocapture

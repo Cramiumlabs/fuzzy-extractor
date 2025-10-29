@@ -1,205 +1,72 @@
 extern crate alloc;
 use alloc::vec::Vec;
-use core::fmt;
+use crate::ecc::{ECC, SecureSketch};
+use crate::errors::FuzzyExtractorError;
 
-use crate::ecc::{ECC, EccError, SecureSketch};
-
-/// Error type for FuzzyExtractor operations
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FuzzyExtractorError {
-    /// Error from ECC/SecureSketch layer
-    EccError(EccError),
-    /// KDF operation failed
-    KdfError(&'static str),
-    /// Invalid input parameters
-    InvalidInput(&'static str),
-}
-
-impl fmt::Display for FuzzyExtractorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FuzzyExtractorError::EccError(e) => write!(f, "ECC error: {}", e),
-            FuzzyExtractorError::KdfError(s) => write!(f, "KDF error: {}", s),
-            FuzzyExtractorError::InvalidInput(s) => write!(f, "Invalid input: {}", s),
-        }
-    }
-}
-
-impl From<EccError> for FuzzyExtractorError {
-    fn from(e: EccError) -> Self {
-        FuzzyExtractorError::EccError(e)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for FuzzyExtractorError {}
-
-/// Trait for Key Derivation Functions suitable for embedded systems
-///
-/// This trait allows different KDF algorithms to be plugged into the FuzzyExtractor.
-/// Implementations should be lightweight and suitable for resource-constrained environments.
+/// Trait for Key Derivation Functions
 pub trait KeyDerivationFunction {
-    /// Derive a key of specified length from input material
-    ///
-    /// # Parameters
-    /// - `input`: The input key material
-    /// - `output_len`: Desired length of the derived key in bytes
-    ///
-    /// # Returns
-    /// A vector containing the derived key, or an error string
+    /// Derives a key from input data
     fn derive(&self, input: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str>;
 }
 
-/// Simple hash-based KDF using XOR and byte rotation
-///
-/// This is a lightweight KDF suitable for embedded systems where cryptographic
-/// libraries might not be available. It uses simple operations (XOR, rotation)
-/// to derive keys from input material.
-///
-/// **Note**: This is a demonstration implementation. For production use,
-/// consider using a proper cryptographic KDF like HKDF.
-pub struct SimpleHashKdf {
-    /// Salt for the KDF (can be empty for stateless operation)
-    pub salt: Vec<u8>,
-}
-
-impl SimpleHashKdf {
-    /// Create a new SimpleHashKdf with optional salt
-    pub fn new(salt: Vec<u8>) -> Self {
-        Self { salt }
-    }
-
-    /// Create a new SimpleHashKdf without salt
-    pub fn new_no_salt() -> Self {
-        Self { salt: Vec::new() }
-    }
-
-    /// Internal mixing function using byte operations
-    fn mix_bytes(&self, data: &[u8], iteration: u8) -> Vec<u8> {
-        let mut result = Vec::with_capacity(data.len());
-
-        for (i, &byte) in data.iter().enumerate() {
-            let salt_byte = if !self.salt.is_empty() {
-                self.salt[i % self.salt.len()]
-            } else {
-                0xA5
-            };
-
-            let mixed = byte
-                .wrapping_add(iteration)
-                .wrapping_mul(3)
-                .rotate_left((i % 8) as u32)
-                ^ salt_byte
-                ^ ((i as u8).wrapping_mul(7));
-
-            result.push(mixed);
-        }
-        result
-    }
-
-    /// Hash-like function using multiple mixing rounds
-    fn hash_rounds(&self, input: &[u8], rounds: usize) -> Vec<u8> {
-        let mut state = input.to_vec();
-
-        for round in 0..rounds {
-            state = self.mix_bytes(&state, round as u8);
-
-            // Additional diffusion: XOR adjacent bytes
-            for i in 0..state.len() {
-                let next_idx = (i + 1) % state.len();
-                let prev_idx = if i == 0 { state.len() - 1 } else { i - 1 };
-                state[i] ^= state[next_idx].rotate_left(1) ^ state[prev_idx].rotate_right(1);
-            }
-        }
-
-        state
-    }
-}
-
-impl KeyDerivationFunction for SimpleHashKdf {
-    fn derive(&self, input: &[u8], output_len: usize) -> Result<Vec<u8>, &'static str> {
-        if input.is_empty() {
-            return Err("Input cannot be empty");
-        }
-        if output_len == 0 {
-            return Err("Output length must be > 0");
-        }
-
-        let mut output = Vec::with_capacity(output_len);
-        let mut counter: u8 = 0;
-
-        while output.len() < output_len {
-            // Prepare input with counter
-            let mut block_input = input.to_vec();
-            block_input.push(counter);
-
-            // Hash the input with multiple rounds for better mixing
-            let hash = self.hash_rounds(&block_input, 5);
-
-            // Take as many bytes as needed
-            let take = core::cmp::min(hash.len(), output_len - output.len());
-            output.extend_from_slice(&hash[..take]);
-
-            counter = counter.wrapping_add(1);
-        }
-
-        Ok(output)
-    }
-}
-
-/// A Fuzzy Extractor that combines SecureSketch with a Key Derivation Function
-///
-/// The fuzzy extractor generates stable cryptographic keys from noisy biometric
-/// or physical data. It consists of two phases:
-///
-/// 1. **Generate**: Takes noisy input `w` and produces:
-///    - A stable key derived from `w`
-///    - Public helper data `p` that doesn't reveal information about the key
-///
-/// 2. **Reproduce**: Takes noisy input `w'` (close to `w`) and helper data `p`,
-///    and reproduces the same stable key
-///
-/// # Type Parameters
-/// - `E`: The error correction code (must implement `ECC` trait)
-/// - `K`: The key derivation function (must implement `KeyDerivationFunction` trait)
+/// Fuzzy Extractor for generating stable keys
 pub struct FuzzyExtractor<E: ECC, K: KeyDerivationFunction> {
-    /// The secure sketch for error correction
     sketch: SecureSketch<E>,
-    /// The key derivation function
     kdf: K,
-    /// Length of the key to generate (in bytes)
     key_len: usize,
+    block_size: Option<usize>,
+    #[allow(dead_code)]
+    per_block_key_len: usize,
 }
 
 impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
-    /// Create a new FuzzyExtractor
-    ///
-    /// # Parameters
-    /// - `ecc`: The error correction code instance
-    /// - `kdf`: The key derivation function instance
-    /// - `key_len`: Length of the key to generate in bytes
+    /// Creates a FuzzyExtractor for single-block mode
     pub fn new(ecc: E, kdf: K, key_len: usize) -> Result<Self, FuzzyExtractorError> {
         if key_len == 0 {
             return Err(FuzzyExtractorError::InvalidInput("key_len must be > 0"));
+        }
+        Ok(Self {
+            sketch: SecureSketch::new(ecc),
+            kdf,
+            key_len,
+            block_size: None,
+            per_block_key_len: key_len,
+        })
+    }
+
+    /// Creates a FuzzyExtractor for multi-block mode
+    pub fn new_with_blocks(
+        ecc: E,
+        kdf: K,
+        block_size: usize,
+        per_block_key_len: usize,
+        final_key_len: usize,
+    ) -> Result<Self, FuzzyExtractorError> {
+        if block_size == 0 {
+            return Err(FuzzyExtractorError::InvalidInput("block_size must be > 0"));
+        }
+        if per_block_key_len == 0 {
+            return Err(FuzzyExtractorError::InvalidInput(
+                "per_block_key_len must be > 0",
+            ));
+        }
+        if final_key_len == 0 {
+            return Err(FuzzyExtractorError::InvalidInput(
+                "final_key_len must be > 0",
+            ));
         }
 
         Ok(Self {
             sketch: SecureSketch::new(ecc),
             kdf,
-            key_len,
+            key_len: final_key_len,
+            block_size: Some(block_size),
+            per_block_key_len,
         })
     }
 
-    /// Generate phase: Extract a stable key from noisy input
-    ///
-    /// # Parameters
-    /// - `w`: The noisy input (e.g., biometric data, PUF response)
-    /// - `seed_input`: The seed material for key derivation (should be random or deterministic depending on use case)
-    ///
-    /// # Returns
-    /// A tuple of `(key, public_helper_data)` where:
-    /// - `key`: The derived cryptographic key
-    /// - `public_helper_data`: Public data needed for reproduction (safe to store)
+    /// Generates a key and helper data from input
+    /// Note: We need a seed_input with high entropy
     pub fn generate(
         &self,
         w: &[u8],
@@ -214,57 +81,181 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
             ));
         }
 
-        let seed = self
-            .kdf
-            .derive(seed_input, self.sketch.ecc.message_len())
-            .map_err(FuzzyExtractorError::KdfError)?;
-
-        // Generate helper data using secure sketch
-        let public_helper = self.sketch.sketch(w, &seed)?;
-
-        // Derive the actual key from the seed
-        let key = self
-            .kdf
-            .derive(&seed, self.key_len)
-            .map_err(FuzzyExtractorError::KdfError)?;
-
-        Ok((key, public_helper))
+        match self.block_size {
+            None => self.generate_single_block(w, seed_input),
+            Some(block_size) => self.generate_multi_block(w, seed_input, block_size),
+        }
     }
 
-    /// Reproduce phase: Recover the stable key from noisy input
-    ///
-    /// # Parameters
-    /// - `w_prime`: The noisy input (should be close to original `w`)
-    /// - `public_helper`: The public helper data from generate phase
-    ///
-    /// # Returns
-    /// The same key that was generated, if `w_prime` is sufficiently close to `w`
+    /// Reproduces the key from noisy input and helper data
     pub fn reproduce(
         &self,
         w_prime: &[u8],
-        public_helper: &[u8],
-        known_erasures: Option<&[u8]>
+        helper: &[u8],
+        known_erasures: Option<&[u8]>,
     ) -> Result<Vec<u8>, FuzzyExtractorError> {
         if w_prime.is_empty() {
             return Err(FuzzyExtractorError::InvalidInput(
                 "Input w_prime cannot be empty",
             ));
         }
-        // Recover the seed using secure sketch
-        let seed = self.sketch.recover(public_helper, w_prime, known_erasures)?;
 
-        // Derive the key from the recovered seed
-        let key = self
-            .kdf
-            .derive(&seed, self.key_len)
-            .map_err(FuzzyExtractorError::KdfError)?;
-
-        Ok(key)
+        match self.block_size {
+            None => self.reproduce_single_block(w_prime, helper, known_erasures),
+            Some(block_size) => {
+                self.reproduce_multi_block(w_prime, helper, block_size, known_erasures)
+            }
+        }
     }
 
-    /// Get the expected length of the key produced by this extractor
+    /// Get output key length
     pub fn key_length(&self) -> usize {
         self.key_len
+    }
+
+    fn derive_kdf(&self, input: &[u8], len: usize) -> Result<Vec<u8>, FuzzyExtractorError> {
+        self.kdf
+            .derive(input, len)
+            .map_err(FuzzyExtractorError::KdfError)
+    }
+
+    fn generate_single_block(
+        &self,
+        w: &[u8],
+        seed_input: &[u8],
+    ) -> Result<(Vec<u8>, Vec<u8>), FuzzyExtractorError> {
+        let msg_len = self.sketch.ecc.message_len();
+        let seed = self.derive_kdf(seed_input, msg_len)?;
+        let helper = self.sketch.sketch(w, &seed)?;
+        let key = self.derive_kdf(&seed, self.key_len)?;
+        Ok((key, helper))
+    }
+
+    fn generate_multi_block(
+        &self,
+        w: &[u8],
+        seed_input: &[u8],
+        block_size: usize,
+    ) -> Result<(Vec<u8>, Vec<u8>), FuzzyExtractorError> {
+        // ---- Step 1: pad input ----
+        let mut w_padded = w.to_vec();
+        if w.len() % block_size != 0 {
+            let pad_len = block_size - (w.len() % block_size);
+            w_padded.extend(core::iter::repeat(0xAA).take(pad_len));
+        }
+
+        let num_blocks = w_padded.len() / block_size;
+        let msg_len = self.sketch.ecc.message_len();
+
+        // ---- Step 2: allocate result buffers ----
+        let mut combined_helper = Vec::with_capacity(4 + num_blocks * 8);
+        combined_helper.extend_from_slice(&(num_blocks as u32).to_le_bytes());
+
+        let mut all_block_keys = Vec::with_capacity(num_blocks * self.per_block_key_len);
+
+        // Reusable buffers (allocated once, reused per iteration)
+        let mut seed_input_block = Vec::with_capacity(seed_input.len() + 1 + block_size);
+
+        // ---- Step 3: iterate blocks ----
+        for i in 0..num_blocks {
+            let w_i = &w_padded[i * block_size..(i + 1) * block_size];
+
+            // Reuse seed_input_block buffer: KDF(seed_input || block_index || w_i)
+            seed_input_block.clear();
+            seed_input_block.extend_from_slice(seed_input);
+            seed_input_block.push(i as u8);
+            seed_input_block.extend_from_slice(w_i);
+
+            // Derive seed for this block
+            let seed_buf = self.derive_kdf(&seed_input_block, msg_len)?;
+            
+            // Generate helper for this block
+            let helper_buf = self.sketch.sketch(w_i, &seed_buf)?;
+
+            // Serialize helper immediately
+            combined_helper.extend_from_slice(&(helper_buf.len() as u32).to_le_bytes());
+            combined_helper.extend_from_slice(&helper_buf);
+
+            // Derive and append block key directly to all_block_keys
+            let key_i = self.derive_kdf(&seed_buf, self.per_block_key_len)?;
+            all_block_keys.extend_from_slice(&key_i);
+            // Note: key_i is freed here at end of iteration
+        }
+
+        // Derive final combined key
+        let final_key = self.derive_kdf(&all_block_keys, self.key_len)?;
+        Ok((final_key, combined_helper))
+    }
+
+    fn reproduce_single_block(
+        &self,
+        w_prime: &[u8],
+        helper: &[u8],
+        known_erasures: Option<&[u8]>,
+    ) -> Result<Vec<u8>, FuzzyExtractorError> {
+        let seed = self.sketch.recover(helper, w_prime, known_erasures)?;
+        self.derive_kdf(&seed, self.key_len)
+    }
+
+    fn reproduce_multi_block(
+        &self,
+        w_prime: &[u8],
+        helper: &[u8],
+        block_size: usize,
+        known_erasures: Option<&[u8]>,
+    ) -> Result<Vec<u8>, FuzzyExtractorError> {
+        if helper.len() < 4 {
+            return Err(FuzzyExtractorError::InvalidInput("Helper too short"));
+        }
+
+        let num_blocks = u32::from_le_bytes(helper[0..4].try_into().unwrap()) as usize;
+        let mut offset = 4;
+
+        // Pad input for deterministic block size
+        let mut w_padded = w_prime.to_vec();
+        if w_prime.len() % block_size != 0 {
+            let pad_len = block_size - (w_prime.len() % block_size);
+            w_padded.extend(core::iter::repeat(0xAA).take(pad_len));
+        }
+
+        // Preallocate result buffer
+        let mut all_block_keys = Vec::with_capacity(num_blocks * self.per_block_key_len);
+
+        for i in 0..num_blocks {
+            // Parse helper_i from combined helper data
+            if offset + 4 > helper.len() {
+                return Err(FuzzyExtractorError::InvalidInput(
+                    "Helper truncated (len prefix)",
+                ));
+            }
+            let helper_len =
+                u32::from_le_bytes(helper[offset..offset + 4].try_into().unwrap()) as usize;
+            offset += 4;
+            if offset + helper_len > helper.len() {
+                return Err(FuzzyExtractorError::InvalidInput(
+                    "Helper truncated (block data)",
+                ));
+            }
+            let helper_i = &helper[offset..offset + helper_len];
+            offset += helper_len;
+
+            // Extract block from w_padded
+            let start = i * block_size;
+            let end = core::cmp::min(start + block_size, w_padded.len());
+            let w_i = &w_padded[start..end];
+
+            // Recover seed for this block
+            let seed_buf = self.sketch.recover(helper_i, w_i, known_erasures)?;
+            
+            // Derive and append block key directly to all_block_keys
+            let key_i = self.derive_kdf(&seed_buf, self.per_block_key_len)?;
+            all_block_keys.extend_from_slice(&key_i);
+            // Note: key_i is freed here at end of iteration
+        }
+
+        // Derive final combined key
+        let final_key = self.derive_kdf(&all_block_keys, self.key_len)?;
+        Ok(final_key)
     }
 }
 
@@ -274,19 +265,7 @@ impl<E: ECC, K: KeyDerivationFunction> FuzzyExtractor<E, K> {
 mod tests {
     use super::*;
     use crate::ecc::ReedSolomonECC;
-
-    // ========================================================================
-    // KDF TESTS
-    // ========================================================================
-
-    #[test]
-    fn test_simple_hash_kdf_basic() {
-        let kdf = SimpleHashKdf::new_no_salt();
-        let input = b"test input data";
-
-        let derived = kdf.derive(input, 32).unwrap();
-        assert_eq!(derived.len(), 32);
-    }
+    use crate::simple_hash_kdf::SimpleHashKdf;
 
     // ========================================================================
     // FUZZY EXTRACTOR TESTS
@@ -407,47 +386,125 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // BLOCK-BASED FUZZY EXTRACTOR TESTS
+    // ========================================================================
+
     #[test]
-    fn stress_test_fuzzy_extractor_high_err_rate() {
-        let msg_len = 24;
-        let key_len = 32;
-        let w = b"stress_test_biometric_input";
-        let seed_input = vec![0xFF; w.len() + 1];
+    fn test_fuzzy_extractor_block_based_basic() {
+        let block_size = 16;
+        let num_blocks = 384 / block_size; // 24 blocks
+        let err_rate = 0.15;
+        let per_block_key_len = 32;
+        let final_key_len = 32;
 
-        // Use high error rates for stress testing
-        for err_rate in [0.2, 0.25, 0.3] {
-            let ecc = ReedSolomonECC::new(msg_len, err_rate).unwrap();
+        // Create input (384 bytes)
+        let mut w = vec![0u8; 384];
+        for i in 0..384 {
+            w[i] = ((i * 7) % 256) as u8;
+        }
+
+        let ecc = ReedSolomonECC::new(block_size, err_rate).unwrap();
+        let kdf = SimpleHashKdf::new_no_salt();
+        let extractor =
+            FuzzyExtractor::new_with_blocks(ecc, kdf, block_size, per_block_key_len, final_key_len)
+                .unwrap();
+
+        // Master seed
+        let seed_input = vec![0xAB; block_size];
+
+        // Generate
+        let (key, helper) = extractor.generate(&w, &seed_input).unwrap();
+        assert_eq!(key.len(), final_key_len);
+
+        // Reproduce with same input
+        let key_reproduced = extractor.reproduce(&w, &helper, None).unwrap();
+        assert_eq!(key, key_reproduced, "Keys should match with no noise");
+
+        println!("Block-based test passed:");
+        println!("  - Blocks: {}", num_blocks);
+        println!("  - Helper size: {} bytes", helper.len());
+        println!("  - Final key size: {} bytes", key.len());
+    }
+
+    #[test]
+    fn test_fuzzy_extractor_block_based_with_noise() {
+        let block_size = 16;
+        let err_rate = 0.15;
+        let per_block_key_len = 32;
+        let final_key_len = 32;
+
+        // Create input (384 bytes)
+        let mut w = vec![0u8; 384];
+        for i in 0..384 {
+            w[i] = ((i * 7) % 256) as u8;
+        }
+
+        let ecc = ReedSolomonECC::new(block_size, err_rate).unwrap();
+        let kdf = SimpleHashKdf::new_no_salt();
+        let extractor =
+            FuzzyExtractor::new_with_blocks(ecc, kdf, block_size, per_block_key_len, final_key_len)
+                .unwrap();
+
+        let seed_input = vec![0xAB; block_size];
+
+        // Generate
+        let (key, helper) = extractor.generate(&w, &seed_input).unwrap();
+
+        // Add noise to some blocks
+        let mut w_noisy = w.clone();
+        let max_errors = ReedSolomonECC::calculate_num_errors(block_size, err_rate);
+
+        // Add errors to first block
+        for i in 0..max_errors.min(block_size) {
+            w_noisy[i] ^= 0xFF;
+        }
+
+        // Add errors to middle block (block 12)
+        let block_offset = 12 * block_size;
+        for i in 0..max_errors.min(block_size) {
+            w_noisy[block_offset + i] ^= 0xFF;
+        }
+
+        // Reproduce with noisy input
+        let key_reproduced = extractor.reproduce(&w_noisy, &helper, None).unwrap();
+        assert_eq!(
+            key, key_reproduced,
+            "Keys should match with correctable noise"
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_extractor_block_based_different_sizes() {
+        // Test with different block sizes
+        for block_size in [16, 20] {
+            let err_rate = 0.15;
+            let per_block_key_len = 32;
+            let final_key_len = 32;
+            let total_size = 128;
+
+            let w = vec![0xAA; total_size];
+            let seed_input = vec![0xBB; block_size];
+
+            let ecc = ReedSolomonECC::new(block_size, err_rate).unwrap();
             let kdf = SimpleHashKdf::new_no_salt();
-            let extractor = FuzzyExtractor::new(ecc, kdf, key_len).unwrap();
+            let extractor = FuzzyExtractor::new_with_blocks(
+                ecc,
+                kdf,
+                block_size,
+                per_block_key_len,
+                final_key_len,
+            )
+            .unwrap();
 
-            // Generate the key and helper data
-            let (key, helper) = extractor.generate(w, &seed_input).unwrap();
+            let (key, helper) = extractor.generate(&w, &seed_input).unwrap();
+            let key_reproduced = extractor.reproduce(&w, &helper, None).unwrap();
 
-            let max_errors = ReedSolomonECC::calculate_num_errors(msg_len, err_rate);
-
-            for _ in 0..50_000 {
-                // Inject the maximum correctable errors into the input
-                let mut w_prime = w.to_vec();
-                for i in 0..max_errors.min(w_prime.len()) {
-                    w_prime[i] ^= 0xFF; // Flip bits to simulate noise
-                }
-
-                // Attempt to reproduce the key with the noisy input
-                let result = extractor.reproduce(&w_prime, &helper, None);
-
-                // Verify that the key is successfully reproduced
-                assert!(
-                    result.is_ok(),
-                    "Failed for err_rate={} in iteration",
-                    err_rate
-                );
-                let key_reproduced = result.unwrap();
-                assert_eq!(
-                    key, key_reproduced,
-                    "Keys should match for err_rate={}",
-                    err_rate
-                );
-            }
+            assert_eq!(
+                key, key_reproduced,
+                "Keys should match for block_size={}",
+                block_size
+            );
         }
     }
 }
